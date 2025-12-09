@@ -10,7 +10,8 @@ __pycache__/
 .DS_Store
 .venv
 .pa230
-
+pa230/
+*.csv
 
 # Distribution / packaging
 .Python
