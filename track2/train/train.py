@@ -73,43 +73,36 @@ def ppo_update(model, optimizer, states, actions, log_probs_old, returns, advant
             mb_returns = returns[idx]
             mb_advantages = advantages[idx]
             
-            # Forward pass
             logits, values = model(mb_states)
             dist = Categorical(logits=logits)
             new_log_probs = dist.log_prob(mb_actions)
             entropy = dist.entropy().mean()
             
-            # Ratio
             ratio = torch.exp(new_log_probs - mb_log_probs_old)
             
-            # Surrogate Loss
             surr1 = ratio * mb_advantages
             surr2 = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * mb_advantages
             actor_loss = -torch.min(surr1, surr2).mean()
             
-            # Critic Loss
             critic_loss = F.mse_loss(values.squeeze(), mb_returns)
             
-            # Total Loss
             loss = actor_loss + 0.5 * critic_loss - ent_coef * entropy
             
             optimizer.zero_grad()
             loss.backward()
-            
             nn.utils.clip_grad_norm_(model.parameters(), 0.5)
-            
             optimizer.step()
 
 def train(env, model, optimizer, num_iterations=1000):
-    # Hyperparams PPO optimisés
-    steps_per_iter = 2048
+    # --- HYPERPARAMETRES GRAND MAÎTRE ---
+    steps_per_iter = 4096  # + grand buffer = meilleure estimation du gradient
     gamma = 0.99
     lam = 0.95
-    epochs = 10            # Augmenté pour mieux apprendre sur chaque batch
-    batch_size = 64
+    epochs = 10
+    batch_size = 128       # + grand batch pour plus de stabilité
     
-    # Annealing
-    initial_lr = 3e-4
+    # Annealing plus agressif
+    initial_lr = 2.5e-4    # Un tout petit peu plus bas pour la précision
     initial_ent_coef = 0.01
     
     model.train()
@@ -118,7 +111,6 @@ def train(env, model, optimizer, num_iterations=1000):
     save_path = os.path.join(current_dir, "../agent/weights.pth")
     
     state, _ = env.reset()
-    
     best_avg_reward = -np.inf
     
     for iteration in range(num_iterations):
@@ -130,7 +122,6 @@ def train(env, model, optimizer, num_iterations=1000):
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr_now
             
-        # Buffers
         log_probs = []
         values = []
         rewards = []
@@ -138,7 +129,7 @@ def train(env, model, optimizer, num_iterations=1000):
         states = []
         actions = []
         
-        # 1. Collection de données
+        # 1. Collection
         for _ in range(steps_per_iter):
             with torch.no_grad():
                 logits, value = model(state)
@@ -149,15 +140,18 @@ def train(env, model, optimizer, num_iterations=1000):
             next_state, reward, terminated, truncated, _ = env.step(action.item())
             done = terminated or truncated
             
+            # REWARD SCALING (Astuce Pro)
+            # On divise par 100 pour que les rewards soient proches de ~1.0
+            # Cela aide le réseau neuronal à converger car les gradients sont normalisés naturellement
+            rewards.append(reward / 100.0)
+            
             states.append(state)
             actions.append(action)
             log_probs.append(log_prob)
             values.append(value.item())
-            rewards.append(reward)
             dones.append(done)
             
             state = next_state
-            
             if done:
                 state, _ = env.reset()
         
@@ -166,7 +160,7 @@ def train(env, model, optimizer, num_iterations=1000):
             _, next_value = model(state)
             next_value = next_value.item()
             
-        # 3. Calcul des avantages
+        # 3. Calcul GAE
         returns = compute_gae(rewards, values, next_value, dones, gamma, lam)
         
         batch_states = torch.stack(states)
@@ -182,10 +176,12 @@ def train(env, model, optimizer, num_iterations=1000):
         ppo_update(model, optimizer, batch_states, batch_actions, batch_log_probs, 
                    batch_returns, advantages, epochs=epochs, batch_size=batch_size, ent_coef=ent_coef_now)
         
-        # Logging
+        # Logging (On remultiplie par 100 pour l'affichage humain)
+        true_rewards = [r * 100.0 for r in rewards]
+        
         ep_rewards = []
         current_ep_rew = 0
-        for r, d in zip(rewards, dones):
+        for r, d in zip(true_rewards, dones):
             current_ep_rew += r
             if d:
                 ep_rewards.append(current_ep_rew)
@@ -194,18 +190,18 @@ def train(env, model, optimizer, num_iterations=1000):
         if len(ep_rewards) > 0:
             avg_reward = np.mean(ep_rewards)
         else:
-            avg_reward = sum(rewards)
+            avg_reward = sum(true_rewards)
             
         if (iteration + 1) % 1 == 0:
             print(f"Iter {iteration+1}/{num_iterations}, Avg Reward: {avg_reward:.2f}, LR: {lr_now:.2e}")
             
-            # Sauvegarde uniquement si on bat le record (et > 150 pour éviter le bruit du début)
-            if avg_reward > best_avg_reward and avg_reward > 150:
+            # On ne sauvegarde que les très bons modèles maintenant (>260)
+            if avg_reward > best_avg_reward and avg_reward > 260:
                 best_avg_reward = avg_reward
                 torch.save(model.state_dict(), save_path)
                 print(f"  >>> Nouveau record ! Sauvegarde ({avg_reward:.2f})")
             elif (iteration + 1) % 20 == 0:
-                 torch.save(model.state_dict(), save_path) # Sauvegarde de sécurité
+                 torch.save(model.state_dict(), save_path.replace(".pth", "_last.pth"))
 
 if __name__ == "__main__":
     env_name = 'LunarLander-v3'
@@ -220,9 +216,9 @@ if __name__ == "__main__":
     n_actions = env.action_space.n
 
     model = ActorCriticNet(obs_dim, n_actions)
-    optimizer = optim.Adam(model.parameters(), lr=3e-4, eps=1e-5) # Adam Epsilon optimisé
+    optimizer = optim.Adam(model.parameters(), lr=2.5e-4, eps=1e-5)
 
-    print(f"Début de l'entraînement PPO EXPERT sur {env_name}...")
+    print(f"Début de l'entraînement PPO GRAND MAÎTRE sur {env_name}...")
     train(env, model, optimizer, num_iterations=1000)
     
     env.close()
