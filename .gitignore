@@ -8,8 +8,8 @@ __pycache__/
 
 # POur fichier Mac
 .DS_Store
-
-
+.venv
+.pa230
 
 
 # Distribution / packaging
