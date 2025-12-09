@@ -15,41 +15,34 @@ from typing import Tuple
 
 
 # Specify your team name in a global variable like so:
-TEAM_NAME = "Your Team Name Here"
+TEAM_NAME = "Z-Team"
 
 
 
-class NetExample(nn.Module):
+class DQN(nn.Module):
     """
-        Same model as in train_example.py
+        DQN Network architecture.
     """
     def __init__(self, input_size, output_size) -> None:
-        super(NetExample, self).__init__()
-        self.layer = nn.Linear(input_size, output_size)
+        super(DQN, self).__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_size, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, output_size)
+        )
 
     def forward(self, x : torch.Tensor) -> torch.Tensor:
-        return self.layer(x)
+        return self.net(x)
 
     @torch.no_grad()
     def act(self, x : torch.Tensor) -> torch.Tensor:
         """
-            Example of Q net
+            Select action with greedy policy
         """
         q_values = self.forward(x)
         actions = torch.argmax(q_values, dim=-1)
-
-        """
-            Example of PG policy net
-        """
-        logits = self.forward(x)
-        distributions = torch.distributions.Categorical(logits=logits)
-
-        # Sample from the distribution
-        actions = distributions.sample()
-
-        # You can also get logprobs for sampled actions like so:
-        log_probs = distributions.log_prob(actions)
-
         return actions
 
     def save(self, path : str) -> None:
@@ -78,9 +71,9 @@ class Policy:
         """
         lunar_action_count = 4
         lunar_obs_dim = 8
-        self.model = NetExample(input_size=lunar_obs_dim,
+        self.model = DQN(input_size=lunar_obs_dim,
                                 output_size=lunar_action_count)
-        self.model.load_state_dict(torch.load(model_path))
+        self.model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
 
         # Set mode to eval (no gradient accumulation, etc.)
         self.model.eval()
