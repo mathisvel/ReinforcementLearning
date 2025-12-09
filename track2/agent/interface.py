@@ -14,21 +14,39 @@ from typing import Tuple
 """
 
 # Specify your team name in a global variable like so:
-TEAM_NAME = "Z-Team"
+TEAM_NAME = "Halilou"
 
 class ActorCriticNet(nn.Module):
     def __init__(self, input_size, output_size):
         super(ActorCriticNet, self).__init__()
-        # MLP pour LunarLander (Input dim: 8)
-        self.fc1 = nn.Linear(input_size, 128)
-        self.fc2 = nn.Linear(128, 64)
+        # MLP optimisé avec Tanh et Init Orthogonale
+        self.fc1 = nn.Linear(input_size, 256) 
+        self.fc2 = nn.Linear(256, 128)
         
-        self.actor = nn.Linear(64, output_size)
-        self.critic = nn.Linear(64, 1)
+        self.actor = nn.Linear(128, output_size)
+        self.critic = nn.Linear(128, 1)
+
+        # Initialisation des poids (Tricks PPO)
+        self._init_weights()
+
+    def _init_weights(self):
+        # Gain sqrt(2) pour les couches avec Tanh
+        for layer in [self.fc1, self.fc2]:
+            nn.init.orthogonal_(layer.weight, np.sqrt(2))
+            nn.init.constant_(layer.bias, 0.0)
+        
+        # Gain 0.01 pour l'acteur (maximise l'entropie au début)
+        nn.init.orthogonal_(self.actor.weight, 0.01)
+        nn.init.constant_(self.actor.bias, 0.0)
+        
+        # Gain 1.0 pour le critique
+        nn.init.orthogonal_(self.critic.weight, 1.0)
+        nn.init.constant_(self.critic.bias, 0.0)
 
     def forward(self, x : torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
+        # Tanh est souvent meilleur pour les envs "physiques" (smoothness)
+        x = torch.tanh(self.fc1(x))
+        x = torch.tanh(self.fc2(x))
         
         action_logits = self.actor(x)
         state_value = self.critic(x)
@@ -38,7 +56,6 @@ class ActorCriticNet(nn.Module):
     def act(self, x : torch.Tensor) -> torch.Tensor:
         action_logits, _ = self.forward(x)
         # Deterministic action for evaluation (argmax)
-        # Cela donne souvent de meilleurs résultats sur LunarLander que le sampling
         actions = torch.argmax(action_logits, dim=-1)
         return actions
 
