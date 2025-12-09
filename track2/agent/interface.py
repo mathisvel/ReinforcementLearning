@@ -14,7 +14,7 @@ from typing import Tuple
 """
 
 # Specify your team name in a global variable like so:
-TEAM_NAME = "Haliloulou"
+TEAM_NAME = "Z-Team"
 
 class ActorCriticNet(nn.Module):
     def __init__(self, input_size, output_size):
