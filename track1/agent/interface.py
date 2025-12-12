@@ -1,7 +1,6 @@
 import gymnasium as gym
-from gymnasium.wrappers import ArrayConversion, RecordEpisodeStatistics 
+from gymnasium.wrappers import ArrayConversion
 import numpy as np
-from time import sleep
 import torch
 import torch.nn as nn
 from typing import Tuple
@@ -21,31 +20,38 @@ TEAM_NAME = "Z-Team"
 
 class DQN(nn.Module):
     """
-        DQN Network architecture.
+    Deep Q-Network (DQN) architecture.
+    A simple Multi-Layer Perceptron (MLP) with 2 hidden layers.
     """
     def __init__(self, input_size, output_size) -> None:
         super(DQN, self).__init__()
         self.net = nn.Sequential(
-            nn.Linear(input_size, 128),
-            nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, output_size)
+            nn.Linear(input_size, 128),  # Input layer to first hidden layer
+            nn.ReLU(),                   # Activation function
+            nn.Linear(128, 128),         # First hidden layer to second hidden layer
+            nn.ReLU(),                   # Activation function
+            nn.Linear(128, output_size)  # Second hidden layer to output layer (Q-values)
         )
 
     def forward(self, x : torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass through the network.
+        """
         return self.net(x)
 
     @torch.no_grad()
     def act(self, x : torch.Tensor) -> torch.Tensor:
         """
-            Select action with greedy policy
+        Select action with greedy policy (argmax of Q-values).
         """
         q_values = self.forward(x)
         actions = torch.argmax(q_values, dim=-1)
         return actions
 
     def save(self, path : str) -> None:
+        """
+        Save the model weights to a file.
+        """
         torch.save(self.state_dict(), path)
 
 
@@ -67,12 +73,16 @@ class Policy:
 
     def load(self, model_path : str) -> None:
         """
-            Construct and load pre-trained model from specified path
+        Construct and load pre-trained model from specified path.
         """
         lunar_action_count = 4
         lunar_obs_dim = 8
+        
+        # Initialize the model
         self.model = DQN(input_size=lunar_obs_dim,
-                                output_size=lunar_action_count)
+                         output_size=lunar_action_count)
+        
+        # Load weights
         self.model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
 
         # Set mode to eval (no gradient accumulation, etc.)
@@ -81,7 +91,7 @@ class Policy:
 
     def act(self, observation : torch.Tensor) -> int:
         """
-            Get action for a single observation from policy. 
+        Get action for a single observation from policy. 
         """
         if self.model is None:
             raise ValueError("Model was not loaded successfuly. Call load(path) before act().")
@@ -114,17 +124,22 @@ class EnvironmentWrapper:
 
     def __init__(self, env : gym.Env) -> None:
         """
-            env - instance of a gym environment that will be wrapped
-            
-
-            Since we applied the ArrayConversion wrapper during training,
-            we also need to apply it here to take effect during evaluation.
+        env - instance of a gym environment that will be wrapped
+        
+        Since we applied the ArrayConversion wrapper during training,
+        we also need to apply it here to take effect during evaluation.
+        This wrapper converts numpy arrays to torch tensors.
         """
         self.wrapped_env = ArrayConversion(env=env, env_xp=np, target_xp=torch)
 
     def reset(self, *args, **kwargs) -> Tuple[np.ndarray, dict]:
+        """
+        Reset the environment.
+        """
         return self.wrapped_env.reset(*args, **kwargs)
 
     def step(self, action : int) -> Tuple[np.ndarray, float, bool, bool, dict]:
-        # You can also adjust the interaction here if needed.
+        """
+        Step the environment.
+        """
         return self.wrapped_env.step(action)
