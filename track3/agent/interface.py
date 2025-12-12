@@ -14,7 +14,7 @@ import cv2
 """
 
 # IMPORTANT: Mettre ton nom d'équipe ici
-TEAM_NAME = "Halilou"
+TEAM_NAME = "Z-Team"
 
 class ActorCriticNet(nn.Module):
     """
