@@ -8,35 +8,20 @@ import torch.optim as optim
 from torch.distributions import Categorical
 import os
 
-# --- CLASSES DUPLIQUÉES DE INTERFACE.PY ---
 
 class ActorCriticNet(nn.Module):
     def __init__(self, input_size, output_size):
         super(ActorCriticNet, self).__init__()
-        # MLP optimisé avec Tanh et Init Orthogonale
-        self.fc1 = nn.Linear(input_size, 256) 
-        self.fc2 = nn.Linear(256, 128)
+        # MLP for LunarLander
+        self.fc1 = nn.Linear(input_size, 128)
+        self.fc2 = nn.Linear(128, 64)
         
-        self.actor = nn.Linear(128, output_size)
-        self.critic = nn.Linear(128, 1)
-
-        # Initialisation des poids (Tricks PPO)
-        self._init_weights()
-
-    def _init_weights(self):
-        for layer in [self.fc1, self.fc2]:
-            nn.init.orthogonal_(layer.weight, np.sqrt(2))
-            nn.init.constant_(layer.bias, 0.0)
-        
-        nn.init.orthogonal_(self.actor.weight, 0.01)
-        nn.init.constant_(self.actor.bias, 0.0)
-        
-        nn.init.orthogonal_(self.critic.weight, 1.0)
-        nn.init.constant_(self.critic.bias, 0.0)
+        self.actor = nn.Linear(64, output_size)
+        self.critic = nn.Linear(64, 1)
 
     def forward(self, x : torch.Tensor):
-        x = torch.tanh(self.fc1(x))
-        x = torch.tanh(self.fc2(x))
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
         
         action_logits = self.actor(x)
         state_value = self.critic(x)
@@ -45,7 +30,7 @@ class ActorCriticNet(nn.Module):
 # --- PPO TRAINING LOGIC ---
 
 def compute_gae(rewards, values, next_value, dones, gamma=0.99, lam=0.95):
-    """Calcule Generalized Advantage Estimation (GAE)"""
+    """Compute Generalized Advantage Estimation (GAE)"""
     gae = 0
     returns = []
     values = values + [next_value]
@@ -57,7 +42,7 @@ def compute_gae(rewards, values, next_value, dones, gamma=0.99, lam=0.95):
         
     return returns
 
-def ppo_update(model, optimizer, states, actions, log_probs_old, returns, advantages, clip_eps=0.2, epochs=10, batch_size=64, ent_coef=0.01):
+def ppo_update(model, optimizer, states, actions, log_probs_old, returns, advantages, clip_eps=0.2, epochs=10, batch_size=64):
     dataset_size = len(states)
     indices = np.arange(dataset_size)
     
@@ -73,37 +58,35 @@ def ppo_update(model, optimizer, states, actions, log_probs_old, returns, advant
             mb_returns = returns[idx]
             mb_advantages = advantages[idx]
             
+            # Forward pass
             logits, values = model(mb_states)
             dist = Categorical(logits=logits)
             new_log_probs = dist.log_prob(mb_actions)
             entropy = dist.entropy().mean()
             
+            # Ratio
             ratio = torch.exp(new_log_probs - mb_log_probs_old)
             
+            # Surrogate Loss
             surr1 = ratio * mb_advantages
             surr2 = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * mb_advantages
             actor_loss = -torch.min(surr1, surr2).mean()
             
+            # Critic Loss
             critic_loss = F.mse_loss(values.squeeze(), mb_returns)
             
-            loss = actor_loss + 0.5 * critic_loss - ent_coef * entropy
+            # Total Loss
+            loss = actor_loss + 0.5 * critic_loss - 0.01 * entropy
             
             optimizer.zero_grad()
             loss.backward()
-            nn.utils.clip_grad_norm_(model.parameters(), 0.5)
             optimizer.step()
 
 def train(env, model, optimizer, num_iterations=1000):
-    # --- HYPERPARAMETRES GRAND MAÎTRE ---
-    steps_per_iter = 4096  # + grand buffer = meilleure estimation du gradient
+    # PPO Hyperparams
+    steps_per_iter = 2048  # Larger buffer for LunarLander
     gamma = 0.99
     lam = 0.95
-    epochs = 10
-    batch_size = 128       # + grand batch pour plus de stabilité
-    
-    # Annealing plus agressif
-    initial_lr = 2.5e-4    # Un tout petit peu plus bas pour la précision
-    initial_ent_coef = 0.01
     
     model.train()
     
@@ -111,17 +94,9 @@ def train(env, model, optimizer, num_iterations=1000):
     save_path = os.path.join(current_dir, "../agent/weights.pth")
     
     state, _ = env.reset()
-    best_avg_reward = -np.inf
     
     for iteration in range(num_iterations):
-        # Linear Annealing
-        frac = 1.0 - (iteration / num_iterations)
-        lr_now = initial_lr * frac
-        ent_coef_now = initial_ent_coef * frac
-        
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = lr_now
-            
+        # Buffers
         log_probs = []
         values = []
         rewards = []
@@ -129,7 +104,7 @@ def train(env, model, optimizer, num_iterations=1000):
         states = []
         actions = []
         
-        # 1. Collection
+        # 1. Data Collection
         for _ in range(steps_per_iter):
             with torch.no_grad():
                 logits, value = model(state)
@@ -140,18 +115,15 @@ def train(env, model, optimizer, num_iterations=1000):
             next_state, reward, terminated, truncated, _ = env.step(action.item())
             done = terminated or truncated
             
-            # REWARD SCALING (Astuce Pro)
-            # On divise par 100 pour que les rewards soient proches de ~1.0
-            # Cela aide le réseau neuronal à converger car les gradients sont normalisés naturellement
-            rewards.append(reward / 100.0)
-            
             states.append(state)
             actions.append(action)
             log_probs.append(log_prob)
             values.append(value.item())
+            rewards.append(reward)
             dones.append(done)
             
             state = next_state
+            
             if done:
                 state, _ = env.reset()
         
@@ -160,7 +132,7 @@ def train(env, model, optimizer, num_iterations=1000):
             _, next_value = model(state)
             next_value = next_value.item()
             
-        # 3. Calcul GAE
+        # 3. Advantage Calculation
         returns = compute_gae(rewards, values, next_value, dones, gamma, lam)
         
         batch_states = torch.stack(states)
@@ -173,35 +145,13 @@ def train(env, model, optimizer, num_iterations=1000):
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         
         # 4. Update
-        ppo_update(model, optimizer, batch_states, batch_actions, batch_log_probs, 
-                   batch_returns, advantages, epochs=epochs, batch_size=batch_size, ent_coef=ent_coef_now)
+        ppo_update(model, optimizer, batch_states, batch_actions, batch_log_probs, batch_returns, advantages)
         
-        # Logging (On remultiplie par 100 pour l'affichage humain)
-        true_rewards = [r * 100.0 for r in rewards]
-        
-        ep_rewards = []
-        current_ep_rew = 0
-        for r, d in zip(true_rewards, dones):
-            current_ep_rew += r
-            if d:
-                ep_rewards.append(current_ep_rew)
-                current_ep_rew = 0
-        
-        if len(ep_rewards) > 0:
-            avg_reward = np.mean(ep_rewards)
-        else:
-            avg_reward = sum(true_rewards)
-            
+        # Logging
+        avg_reward = sum(rewards) / (dones.count(True) + 1e-9)
         if (iteration + 1) % 1 == 0:
-            print(f"Iter {iteration+1}/{num_iterations}, Avg Reward: {avg_reward:.2f}, LR: {lr_now:.2e}")
-            
-            # On ne sauvegarde que les très bons modèles maintenant (>260)
-            if avg_reward > best_avg_reward and avg_reward > 260:
-                best_avg_reward = avg_reward
-                torch.save(model.state_dict(), save_path)
-                print(f"  >>> Nouveau record ! Sauvegarde ({avg_reward:.2f})")
-            elif (iteration + 1) % 20 == 0:
-                 torch.save(model.state_dict(), save_path.replace(".pth", "_last.pth"))
+            print(f"Iter {iteration+1}/{num_iterations}, Avg Reward (batch): {avg_reward:.2f}, Total Steps: {(iteration+1)*steps_per_iter}")
+            torch.save(model.state_dict(), save_path)
 
 if __name__ == "__main__":
     env_name = 'LunarLander-v3'
@@ -216,9 +166,10 @@ if __name__ == "__main__":
     n_actions = env.action_space.n
 
     model = ActorCriticNet(obs_dim, n_actions)
-    optimizer = optim.Adam(model.parameters(), lr=2.5e-4, eps=1e-5)
+    optimizer = optim.Adam(model.parameters(), lr=3e-4)
 
-    print(f"Début de l'entraînement PPO GRAND MAÎTRE sur {env_name}...")
-    train(env, model, optimizer, num_iterations=1000)
+    print(f"Starting PPO training on {env_name}...")
+    # 500 iterations * 2048 steps = ~1M steps. Sufficient for LunarLander.
+    train(env, model, optimizer, num_iterations=500)
     
     env.close()

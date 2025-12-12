@@ -19,34 +19,16 @@ TEAM_NAME = "Z-Team"
 class ActorCriticNet(nn.Module):
     def __init__(self, input_size, output_size):
         super(ActorCriticNet, self).__init__()
-        # MLP optimisé avec Tanh et Init Orthogonale
-        self.fc1 = nn.Linear(input_size, 256) 
-        self.fc2 = nn.Linear(256, 128)
+        # MLP for LunarLander (Input dim: 8)
+        self.fc1 = nn.Linear(input_size, 128)
+        self.fc2 = nn.Linear(128, 64)
         
-        self.actor = nn.Linear(128, output_size)
-        self.critic = nn.Linear(128, 1)
-
-        # Initialisation des poids (Tricks PPO)
-        self._init_weights()
-
-    def _init_weights(self):
-        # Gain sqrt(2) pour les couches avec Tanh
-        for layer in [self.fc1, self.fc2]:
-            nn.init.orthogonal_(layer.weight, np.sqrt(2))
-            nn.init.constant_(layer.bias, 0.0)
-        
-        # Gain 0.01 pour l'acteur (maximise l'entropie au début)
-        nn.init.orthogonal_(self.actor.weight, 0.01)
-        nn.init.constant_(self.actor.bias, 0.0)
-        
-        # Gain 1.0 pour le critique
-        nn.init.orthogonal_(self.critic.weight, 1.0)
-        nn.init.constant_(self.critic.bias, 0.0)
+        self.actor = nn.Linear(64, output_size)
+        self.critic = nn.Linear(64, 1)
 
     def forward(self, x : torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        # Tanh est souvent meilleur pour les envs "physiques" (smoothness)
-        x = torch.tanh(self.fc1(x))
-        x = torch.tanh(self.fc2(x))
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
         
         action_logits = self.actor(x)
         state_value = self.critic(x)
@@ -56,6 +38,7 @@ class ActorCriticNet(nn.Module):
     def act(self, x : torch.Tensor) -> torch.Tensor:
         action_logits, _ = self.forward(x)
         # Deterministic action for evaluation (argmax)
+        # Often yields better results on LunarLander than sampling
         actions = torch.argmax(action_logits, dim=-1)
         return actions
 
@@ -80,7 +63,7 @@ class Policy:
         self.model = ActorCriticNet(input_size=lunar_obs_dim,
                                     output_size=lunar_action_count)
                                     
-        # Chargement des poids
+        # Load weights
         self.model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
 
         # Set mode to eval
@@ -106,7 +89,7 @@ class EnvironmentWrapper:
     """
 
     def __init__(self, env : gym.Env) -> None:
-        # Pas d'ImageWrapper pour LunarLander
+        # No ImageWrapper for LunarLander
         self.wrapped_env = ArrayConversion(env=env, env_xp=np, target_xp=torch)
 
     def reset(self, *args, **kwargs) -> Tuple[np.ndarray, dict]:
