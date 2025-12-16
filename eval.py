@@ -15,9 +15,13 @@ class eval_wrapper(gym.Wrapper):
         super().__init__(env)
         self.ep_rews = []
         self.ep_rew = 0
+        self.first_reset = True
 
     def reset(self, **kwargs):
-        self.ep_rews.append(self.ep_rew)
+        if not self.first_reset:
+            self.ep_rews.append(self.ep_rew)
+        else:
+            self.first_reset = False
         self.ep_rew = 0
 
         return self.env.reset(**kwargs)
