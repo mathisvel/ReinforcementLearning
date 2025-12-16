@@ -10,9 +10,6 @@ from collections import deque
 import os
 import cv2
 
-# --- NETWORK AND WRAPPER (IDENTICAL TO INTERFACE.PY) ---
-# We copy them to ensure training uses exactly the same architecture
-
 class ActorCriticNet(nn.Module):
     def __init__(self, action_dim):
         super(ActorCriticNet, self).__init__()
@@ -24,7 +21,7 @@ class ActorCriticNet(nn.Module):
         self.actor = nn.Linear(512, action_dim)
         self.critic = nn.Linear(512, 1)
         
-        # Orthogonal Initialization (Vital for fast convergence)
+        # Orthogonal Initialization
         self._init_weights()
 
     def _init_weights(self):
@@ -32,9 +29,9 @@ class ActorCriticNet(nn.Module):
             if isinstance(m, (nn.Conv2d, nn.Linear)):
                 nn.init.orthogonal_(m.weight, np.sqrt(2))
                 nn.init.constant_(m.bias, 0.0)
-        # Actor: small gain to start exploration
+        # Actor
         nn.init.orthogonal_(self.actor.weight, 0.01)
-        # Critic: standard gain
+        # Critic
         nn.init.orthogonal_(self.critic.weight, 1.0)
 
     def forward(self, x):
@@ -87,8 +84,6 @@ class ImageWrapper(gym.Wrapper):
         gray = np.dot(obs[..., :3], [0.299, 0.587, 0.114]).astype(np.uint8)
         return cv2.resize(gray, (self.img_size, self.img_size), interpolation=cv2.INTER_AREA)
 
-# --- TRAINING ALGO (PPO) ---
-
 def make_env(env_name):
     def _init():
         env = gym.make(env_name, continuous=False)
@@ -100,26 +95,26 @@ def make_env(env_name):
     return _init
 
 def train():
-    # 1. Config Environment
+    # Config Environment
     env_name = 'CarRacing-v3'
     num_envs = 8
     # Vectorized Environment (Parallel)
     envs = gym.vector.AsyncVectorEnv([make_env(env_name) for _ in range(num_envs)])
     
-    # 2. Config Model & Optimizer
+    # Config Model
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
     
     model = ActorCriticNet(action_dim=5).to(device)
     optimizer = optim.Adam(model.parameters(), lr=2.5e-4, eps=1e-5)
     
-    # 3. PPO Hyperparameters
+    # PPO Hyperparameters
     num_iterations = 100
     steps_per_env = 256      # 256 * 8 = 2048 steps total per update
-    batch_size = 256         # Larger batch size for stability
+    batch_size = 256
     gamma = 0.99
     lam = 0.95
-    epochs = 4               # Reduced epochs for speed
+    epochs = 4 
     clip_eps = 0.2
     ent_coef = 0.01
     
@@ -127,7 +122,7 @@ def train():
     save_path = os.path.join(os.path.dirname(__file__), "../agent/weights.pth")
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     
-    # 4. Training loop
+    # Training loop
     # Reset returns (obs, info)
     state, _ = envs.reset()
     state = torch.tensor(state).to(device)
@@ -138,7 +133,7 @@ def train():
     print(f"Starting training {env_name} with {num_envs} envs...")
     
     for iteration in range(num_iterations):
-        # --- A. Data Collection (Rollout) ---
+        # Data Collection
         states, actions, log_probs, rewards, values, dones = [], [], [], [], [], []
         
         for _ in range(steps_per_env):
@@ -174,7 +169,7 @@ def train():
                         if np.random.rand() < 0.05: # Don't spam
                              print(f"Ep Reward: {ep_rew:.1f} | Best: {best_score:.1f}")
 
-        # --- B. Advantage Calculation (GAE) ---
+        # Advantage Calculation (GAE)
         with torch.no_grad():
             _, next_value = model(state)
             next_value = next_value.squeeze()
@@ -194,7 +189,7 @@ def train():
             gae = delta + gamma * lam * mask * gae
             returns.insert(0, gae + values[i])
             
-        # Conversion & Flattening (Batch, Envs, ...) -> (Batch * Envs, ...)
+        # Conversion & Flattening for batching
         b_states = torch.stack(states).view(-1, 4, 84, 84)
         b_actions = torch.stack(actions).view(-1)
         b_log_probs = torch.stack(log_probs).view(-1)
@@ -205,7 +200,7 @@ def train():
         # Advantage Normalization
         b_advantages = (b_advantages - b_advantages.mean()) / (b_advantages.std() + 1e-8)
         
-        # --- C. Optimization (PPO Update) ---
+        # Optimization (PPO Update)
         dataset_size = b_states.size(0)
         indices = np.arange(dataset_size)
         
@@ -240,7 +235,7 @@ def train():
                 nn.utils.clip_grad_norm_(model.parameters(), 0.5)
                 optimizer.step()
         
-        # --- D. Logging & Save ---
+        # Logging & Save
         if (iteration + 1) % 10 == 0:
             print(f"Iter {iteration+1}/{num_iterations} | Global Steps: {global_step}")
             torch.save(model.state_dict(), save_path)
